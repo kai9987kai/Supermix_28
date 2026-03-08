@@ -835,8 +835,49 @@ def looks_like_model_repo_id(value: str) -> bool:
     return bool(MODEL_REPO_ID_RE.fullmatch(str(value or "").strip()))
 
 
+def safe_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError as exc:
+        logging.debug("Skipping inaccessible path during exists() probe: %s (%s)", path, exc)
+        return False
+
+
+def safe_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError as exc:
+        logging.debug("Skipping inaccessible path during is_dir() probe: %s (%s)", path, exc)
+        return False
+
+
+def safe_resolve(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError as exc:
+        logging.debug("Falling back to unresolved path for %s (%s)", path, exc)
+        return path
+
+
+def sorted_child_dirs(path: Path) -> List[Path]:
+    try:
+        children = [child for child in path.iterdir() if safe_is_dir(child)]
+    except OSError as exc:
+        logging.debug("Skipping inaccessible directory listing: %s (%s)", path, exc)
+        return []
+
+    def mtime(child: Path) -> float:
+        try:
+            return child.stat().st_mtime
+        except OSError as exc:
+            logging.debug("Skipping mtime probe for %s (%s)", child, exc)
+            return -1.0
+
+    return sorted(children, key=mtime, reverse=True)
+
+
 def is_local_model_dir(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").exists() and any((path / name).exists() for name in MODEL_WEIGHT_FILES)
+    return safe_is_dir(path) and safe_exists(path / "config.json") and any(safe_exists(path / name) for name in MODEL_WEIGHT_FILES)
 
 
 def iter_hf_cache_roots() -> List[Path]:
@@ -847,10 +888,7 @@ def iter_hf_cache_roots() -> List[Path]:
         if path is None:
             return
         candidate = path.expanduser()
-        try:
-            resolved = candidate.resolve()
-        except Exception:
-            resolved = candidate
+        resolved = safe_resolve(candidate)
         key = str(resolved)
         if key not in seen:
             seen.add(key)
@@ -883,19 +921,17 @@ def find_cached_model_snapshot(repo_id: str, extra_roots: Optional[List[Path]] =
         refs_dir = repo_cache_dir / "refs"
         for ref_name in ("main", "master"):
             ref_file = refs_dir / ref_name
-            if ref_file.exists():
-                snapshot_name = ref_file.read_text(encoding="utf-8", errors="ignore").strip()
+            if safe_exists(ref_file):
+                try:
+                    snapshot_name = ref_file.read_text(encoding="utf-8", errors="ignore").strip()
+                except OSError as exc:
+                    logging.debug("Skipping inaccessible HF ref file %s (%s)", ref_file, exc)
+                    snapshot_name = ""
                 if snapshot_name:
                     candidates.append(repo_cache_dir / "snapshots" / snapshot_name)
         snapshots_dir = repo_cache_dir / "snapshots"
-        if snapshots_dir.exists():
-            candidates.extend(
-                sorted(
-                    (child for child in snapshots_dir.iterdir() if child.is_dir()),
-                    key=lambda child: child.stat().st_mtime,
-                    reverse=True,
-                )
-            )
+        if safe_exists(snapshots_dir):
+            candidates.extend(sorted_child_dirs(snapshots_dir))
         return candidates
 
     for root in roots:
@@ -905,12 +941,12 @@ def find_cached_model_snapshot(repo_id: str, extra_roots: Optional[List[Path]] =
                 continue
             seen.add(key)
             if is_local_model_dir(repo_cache_dir):
-                return repo_cache_dir.resolve()
-            if not repo_cache_dir.exists():
+                return safe_resolve(repo_cache_dir)
+            if not safe_exists(repo_cache_dir):
                 continue
             for snapshot_dir in iter_snapshot_candidates(repo_cache_dir):
                 if is_local_model_dir(snapshot_dir):
-                    return snapshot_dir.resolve()
+                    return safe_resolve(snapshot_dir)
     return None
 
 
@@ -930,17 +966,17 @@ def resolve_local_base_model_path(value: str) -> str:
 
     if raw:
         raw_path = Path(raw).expanduser()
-        if raw_path.exists():
+        if safe_exists(raw_path):
             if not is_local_model_dir(raw_path):
                 raise FileNotFoundError(f"Base model directory exists but does not look usable for offline loading: {raw_path}")
-            return str(raw_path.resolve())
+            return str(safe_resolve(raw_path))
         if looks_like_model_repo_id(raw):
             resolved_snapshot = find_cached_model_snapshot(raw)
             if resolved_snapshot is not None:
                 return str(resolved_snapshot)
             default_snapshot = Path(DEFAULT_BASE_MODEL)
-            if raw == DEFAULT_BASE_MODEL_REPO and default_snapshot.exists() and is_local_model_dir(default_snapshot):
-                return str(default_snapshot.resolve())
+            if raw == DEFAULT_BASE_MODEL_REPO and safe_exists(default_snapshot) and is_local_model_dir(default_snapshot):
+                return str(safe_resolve(default_snapshot))
             raise FileNotFoundError(
                 f"Could not find a local Hugging Face cache snapshot for '{raw}'. "
                 f"Set {BASE_MODEL_OVERRIDE_ENV} to a local model directory or pre-download the base model."
@@ -948,8 +984,8 @@ def resolve_local_base_model_path(value: str) -> str:
         raise FileNotFoundError(f"Base model path does not exist: {raw_path}")
 
     default_snapshot = Path(DEFAULT_BASE_MODEL)
-    if default_snapshot.exists() and is_local_model_dir(default_snapshot):
-        return str(default_snapshot.resolve())
+    if safe_exists(default_snapshot) and is_local_model_dir(default_snapshot):
+        return str(safe_resolve(default_snapshot))
 
     resolved_snapshot = find_cached_model_snapshot(DEFAULT_BASE_MODEL_REPO)
     if resolved_snapshot is not None:
