@@ -175,3 +175,8 @@ Resuming from latest checkpoint in artifacts\qwen_supermix_enhanced_v28_clean_ev
 [train] step=333 loss=105.9686 lr=6.21855e-06 rdrop=0.0000
 [train] step=334 loss=105.8468 lr=6.1988e-06 rdrop=0.0000
 [train] step=335 loss=105.7173 lr=6.17904e-06 rdrop=0.0000
+[train] step=336 loss=105.5734 lr=6.15928e-06 rdrop=0.0000
+[train] step=337 loss=105.4274 lr=6.13952e-06 rdrop=0.0000
+[train] step=338 loss=105.2992 lr=6.11976e-06 rdrop=0.0000
+[train] step=339 loss=105.1530 lr=6.1e-06 rdrop=0.0000
+[train] step=340 loss=105.0013 lr=6.08024e-06 rdrop=0.0000
